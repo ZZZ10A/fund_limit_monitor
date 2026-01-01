@@ -51,31 +51,7 @@ python3 monitor.py
 
 本项目已配置 GitHub Actions workflow，每天可自动运行并更新历史记录。
 
-### 启用步骤
-
-1. **推送代码到 GitHub**
-   将本项目代码 push 到您的 GitHub 仓库。
-
-2. **配置权限**
-   GitHub Actions 需要写入权限来更新 `history.json`（用于记录涨跌历史）。
-
-   - 进入仓库 **Settings** > **Actions** > **General**
-   - 找到 **Workflow permissions**
-   - 勾选 **Read and write permissions**
-   - 点击 **Save**
-
-3. **配置 Webhook (可选但推荐)**
-   如果仓库是公开的（Public），**强烈建议**不要将 Webhook URL 直接写在 `config.json` 中。
-   您可以使用 GitHub Secrets：
-
-   - 在 Settings > Secrets and variables > Actions 中添加 `WEBHOOK_URL`。
-   - (需修改代码以支持从环境变量读取，目前版本仅支持 `config.json`)
-   - **注意**：当前代码直接读取 `config.json`。如果是私有仓库（Private），则可以直接保留 `config.json` 中的配置。
-
-4. **查看运行结果**
-   - 进入 **Actions** 标签页。
-   - 您会看到 "Daily Fund Limit Monitor" 的工作流。
-   - 它可以手动触发（Workflow dispatch），也会在每天北京时间 14:00 (UTC 06:00) 自动运行。
+它可以手动触发（Workflow dispatch），也会在每天北京时间 13:30 (UTC 05:30) 自动运行。
 
 ## 注意事项
 

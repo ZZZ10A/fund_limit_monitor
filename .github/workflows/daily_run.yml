@@ -6,6 +6,9 @@ on:
     - cron: '30 5 * * 1-5'
   workflow_dispatch: # 允许你手动点击运行测试
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest

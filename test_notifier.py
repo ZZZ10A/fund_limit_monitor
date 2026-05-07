@@ -74,6 +74,38 @@ class DingTalkNotifierTest(unittest.TestCase):
             "[查看原图](https://example.com/reports/fund-limit.png)",
         )
 
+    @patch("notifier.requests.post")
+    def test_returns_false_when_dingtalk_returns_error_body(self, post):
+        post.return_value = Mock(status_code=200)
+        post.return_value.json.return_value = {
+            "errcode": 310000,
+            "errmsg": "keywords not in content",
+        }
+        notifier = DingTalkNotifier("https://example.com/send?access_token=TOKEN", "SECRET")
+
+        with patch("builtins.print") as mock_print:
+            result = notifier.send("日报", "# 内容")
+
+        self.assertFalse(result)
+        mock_print.assert_called_once_with(
+            "DingTalk notification response. "
+            "Status: 200, errcode: 310000, errmsg: keywords not in content"
+        )
+
+    @patch("notifier.requests.post")
+    def test_returns_true_when_dingtalk_returns_success_body(self, post):
+        post.return_value = Mock(status_code=200)
+        post.return_value.json.return_value = {"errcode": 0, "errmsg": "ok"}
+        notifier = DingTalkNotifier("https://example.com/send?access_token=TOKEN", "SECRET")
+
+        with patch("builtins.print") as mock_print:
+            result = notifier.send("日报", "# 内容")
+
+        self.assertTrue(result)
+        mock_print.assert_called_once_with(
+            "DingTalk notification response. Status: 200, errcode: 0, errmsg: ok"
+        )
+
 
 class WeChatNotifierTest(unittest.TestCase):
     @patch("notifier.requests.post")

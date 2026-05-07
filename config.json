@@ -1,5 +1,15 @@
 {
-    "webhook_url": "",
+    "notifiers": [
+        {
+            "type": "dingtalk",
+            "webhook_url_env": "DINGTALK_WEBHOOK_URL",
+            "secret_env": "DINGTALK_SECRET"
+        },
+        {
+            "type": "wechat",
+            "webhook_url_env": "WEBHOOK_URL"
+        }
+    ],
     "funds": [
         { "code": "160213", "name": "国泰纳斯达克100(LOF)" },
         { "code": "270042", "name": "广发纳斯达克100ETF联接A" },

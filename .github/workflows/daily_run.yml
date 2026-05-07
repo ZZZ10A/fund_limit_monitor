@@ -26,6 +26,8 @@ jobs:
         env:
           # 从保险箱取出 Webhook 链接交给程序
           WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+          DINGTALK_WEBHOOK_URL: ${{ secrets.DINGTALK_WEBHOOK_URL }}
+          DINGTALK_SECRET: ${{ secrets.DINGTALK_SECRET }}
           TZ: Asia/Shanghai
         run: python monitor.py
 

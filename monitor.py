@@ -5,6 +5,8 @@ import time
 import re
 import os
 
+from notifier import build_notifier
+
 class FundMonitor:
     CONFIG_FILE = 'config.json'
     HISTORY_FILE = 'history.json'
@@ -12,7 +14,7 @@ class FundMonitor:
     def __init__(self):
         self.config = self._load_json(self.CONFIG_FILE)
         self.history = self._load_json(self.HISTORY_FILE)
-        self.webhook_url = os.environ.get('WEBHOOK_URL') or self.config.get('webhook_url')
+        self.notifier = build_notifier(self.config)
         self.funds_config = self.config.get('funds', [])
         
     def _load_json(self, filename):
@@ -113,24 +115,6 @@ class FundMonitor:
             
         return info
 
-    def send_notification(self, message):
-        if not self.webhook_url or "YOUR_WECHAT" in self.webhook_url:
-            print("Warning: Webhook URL not configured. Printing message instead.")
-            print(message)
-            return
-
-        headers = {'Content-Type': 'application/json'}
-        data = {
-            "msgtype": "markdown",
-            "markdown": {"content": message}
-        }
-        
-        try:
-            resp = requests.post(self.webhook_url, json=data, headers=headers)
-            print(f"Notification sent. Status: {resp.status_code}")
-        except Exception as e:
-            print(f"Failed to send notification: {e}")
-
     def generate_report(self, funds_data):
         # Sort by limit value descending
         funds_data.sort(key=lambda x: x['limit_val'], reverse=True)
@@ -211,7 +195,7 @@ class FundMonitor:
             time.sleep(0.5)
             
         message = self.generate_report(funds_data)
-        self.send_notification(message)
+        self.notifier.send("基金申购限额日报", message)
         
         # Save History
         curr_limits = {f['code']: f['limit_val'] for f in funds_data}

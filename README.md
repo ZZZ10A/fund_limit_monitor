@@ -8,7 +8,7 @@
 - 提取“交易状态”和“单日限额”信息。
 - 生成日报并通过抽象通知通道推送。
 - 支持企业微信 Markdown 机器人。
-- 支持钉钉 Markdown 机器人（加签模式）。
+- 支持钉钉 Markdown 机器人（加签模式），可发送图片版日报。
 
 ## 目录结构
 
@@ -17,6 +17,8 @@
 ├── config.json       # 配置文件 (需填入Webhook URL)
 ├── monitor.py        # 主程序
 ├── notifier.py       # 通知通道实现
+├── report_renderer.py # 图片日报渲染
+├── assets/fonts/     # 内置中文字体子集
 └── requirements.txt  # Python依赖
 ```
 
@@ -89,6 +91,23 @@
    ```
 
    如果不配置 `webhook_url_env` 和 `secret_env`，默认读取 `DINGTALK_WEBHOOK_URL` 和 `DINGTALK_SECRET`。
+
+   **钉钉图片日报**
+
+   钉钉自定义 Webhook 机器人通过 Markdown 展示图片，因此图片必须先有公网 URL。本项目默认将 PNG 保存到 `reports/`，GitHub Actions 会提交后再发送钉钉消息：
+
+   ```bash
+   export REPORT_IMAGE_BASE_URL="https://raw.githubusercontent.com/OWNER/REPO/main/reports"
+   export REPORT_IMAGE_DIR="reports"
+   ```
+
+   如果未配置 `REPORT_IMAGE_BASE_URL`，`python3 monitor.py` 会保持纯 Markdown 通知；`--prepare-report` 仍会生成本地 PNG，但 payload 中不会附带公网图片 URL。
+
+   图片渲染默认使用项目内置字体 `assets/fonts/FundReportSans-Subset.otf`。如需替换字体：
+
+   ```bash
+   export REPORT_FONT_PATH="/path/to/font.otf"
+   ```
 
    **企业微信机器人**
 
@@ -167,16 +186,36 @@ python3 monitor.py
 
 正常情况下，您会在终端看到输出（如果没有配置 Webhook），或者在钉钉群/企业微信群收到消息。
 
+**两阶段生成并发送：**
+
+```bash
+python3 monitor.py --prepare-report --report-output .report/latest.json
+python3 monitor.py --send-report .report/latest.json
+```
+
+该模式适合 CI：先生成并提交 `reports/*.png`，让图片 URL 生效后，再发送钉钉消息。
+
+**重新生成字体子集：**
+
+修改基金列表或图片文案后，运行：
+
+```bash
+python3 scripts/build_font_subset.py
+```
+
+字体来源为 Noto Sans CJK SC，许可证见 `assets/fonts/OFL.txt`。
+
 **运行测试：**
 
 ```bash
 python3 -m unittest test_notifier.py
-python3 -m py_compile monitor.py notifier.py test_notifier.py
+python3 -m unittest test_report_renderer.py
+python3 -m py_compile monitor.py notifier.py report_renderer.py test_notifier.py test_report_renderer.py
 ```
 
 ## GitHub Actions 自动运行
 
-本项目已配置 GitHub Actions workflow，每天可自动运行并更新历史记录。
+本项目已配置 GitHub Actions workflow，每天可自动运行、生成图片日报、更新历史记录并发送通知。
 
 它可以手动触发（Workflow dispatch），也会在每天北京时间 13:30 (UTC 05:30) 自动运行。
 

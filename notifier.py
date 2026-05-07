@@ -4,6 +4,7 @@ import hmac
 import os
 import time
 from abc import ABC, abstractmethod
+from typing import Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import requests
@@ -11,14 +12,16 @@ import requests
 
 class Notifier(ABC):
     @abstractmethod
-    def send(self, title: str, message: str) -> bool:
+    def send(self, title: str, message: str, image_url: Optional[str] = None) -> bool:
         """Send a notification and return whether the request succeeded."""
 
 
 class ConsoleNotifier(Notifier):
-    def send(self, title: str, message: str) -> bool:
+    def send(self, title: str, message: str, image_url: Optional[str] = None) -> bool:
         print("Printing notification to console.")
         print(f"Title: {title}")
+        if image_url:
+            print(f"Image: {image_url}")
         print(message)
         return True
 
@@ -27,10 +30,10 @@ class MultiNotifier(Notifier):
     def __init__(self, notifiers):
         self.notifiers = notifiers
 
-    def send(self, title: str, message: str) -> bool:
+    def send(self, title: str, message: str, image_url: Optional[str] = None) -> bool:
         results = []
         for notifier in self.notifiers:
-            results.append(notifier.send(title, message))
+            results.append(notifier.send(title, message, image_url=image_url))
         return all(results)
 
 
@@ -38,7 +41,7 @@ class WeChatNotifier(Notifier):
     def __init__(self, webhook_url: str):
         self.webhook_url = webhook_url
 
-    def send(self, title: str, message: str) -> bool:
+    def send(self, title: str, message: str, image_url: Optional[str] = None) -> bool:
         data = {
             "msgtype": "markdown",
             "markdown": {"content": message},
@@ -65,7 +68,10 @@ class DingTalkNotifier(Notifier):
         self.webhook_url = webhook_url
         self.secret = secret
 
-    def send(self, title: str, message: str) -> bool:
+    def send(self, title: str, message: str, image_url: Optional[str] = None) -> bool:
+        if image_url:
+            message = f"## {title}\n\n![{title}]({image_url})\n\n[查看原图]({image_url})"
+
         data = {
             "msgtype": "markdown",
             "markdown": {

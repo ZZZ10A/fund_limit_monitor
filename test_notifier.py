@@ -54,6 +54,26 @@ class DingTalkNotifierTest(unittest.TestCase):
         self.assertEqual(payload["markdown"]["title"], "日报")
         self.assertEqual(payload["markdown"]["text"], "# 内容")
 
+    @patch("notifier.requests.post")
+    def test_sends_dingtalk_image_payload_when_image_url_is_provided(self, post):
+        post.return_value = Mock(status_code=200)
+        notifier = DingTalkNotifier("https://example.com/send?access_token=TOKEN", "SECRET")
+        image_url = "https://example.com/reports/fund-limit.png"
+
+        with patch("builtins.print"):
+            result = notifier.send("日报", "# 内容", image_url=image_url)
+
+        self.assertTrue(result)
+        payload = post.call_args.kwargs["json"]
+        self.assertEqual(payload["msgtype"], "markdown")
+        self.assertEqual(payload["markdown"]["title"], "日报")
+        self.assertEqual(
+            payload["markdown"]["text"],
+            "## 日报\n\n"
+            "![日报](https://example.com/reports/fund-limit.png)\n\n"
+            "[查看原图](https://example.com/reports/fund-limit.png)",
+        )
+
 
 class WeChatNotifierTest(unittest.TestCase):
     @patch("notifier.requests.post")
@@ -81,8 +101,29 @@ class MultiNotifierTest(unittest.TestCase):
         result = notifier.send("日报", "# 内容")
 
         self.assertFalse(result)
-        first.send.assert_called_once_with("日报", "# 内容")
-        second.send.assert_called_once_with("日报", "# 内容")
+        first.send.assert_called_once_with("日报", "# 内容", image_url=None)
+        second.send.assert_called_once_with("日报", "# 内容", image_url=None)
+
+    def test_passes_image_url_to_all_notifiers(self):
+        first = Mock()
+        first.send.return_value = True
+        second = Mock()
+        second.send.return_value = True
+        notifier = MultiNotifier([first, second])
+
+        result = notifier.send("日报", "# 内容", image_url="https://example.com/a.png")
+
+        self.assertTrue(result)
+        first.send.assert_called_once_with(
+            "日报",
+            "# 内容",
+            image_url="https://example.com/a.png",
+        )
+        second.send.assert_called_once_with(
+            "日报",
+            "# 内容",
+            image_url="https://example.com/a.png",
+        )
 
 
 class BuildNotifierTest(unittest.TestCase):

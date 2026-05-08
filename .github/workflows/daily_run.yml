@@ -6,6 +6,9 @@ on:
     - cron: '30 5 * * 1-5'
   workflow_dispatch: # 允许你手动点击运行测试
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -22,17 +25,26 @@ jobs:
         run: |
           pip install -r requirements.txt
 
-      - name: Run script
+      - name: Prepare report
         env:
-          # 从保险箱取出 Webhook 链接交给程序
-          WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
           TZ: Asia/Shanghai
-        run: python monitor.py
+          REPORT_IMAGE_BASE_URL: https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/reports
+          REPORT_IMAGE_DIR: reports
+        run: python monitor.py --prepare-report --report-output .report/latest.json
 
-      - name: Commit history
+      - name: Commit report assets
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add history.json
-          git commit -m "Update history [skip ci]" || echo "No changes to commit"
+          git add history.json reports
+          git commit -m "Update report assets [skip ci]" || echo "No changes to commit"
           git push
+
+      - name: Send report
+        env:
+          # 从保险箱取出 Webhook 链接交给程序
+          WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+          DINGTALK_WEBHOOK_URL: ${{ secrets.DINGTALK_WEBHOOK_URL }}
+          DINGTALK_SECRET: ${{ secrets.DINGTALK_SECRET }}
+          TZ: Asia/Shanghai
+        run: python monitor.py --send-report .report/latest.json

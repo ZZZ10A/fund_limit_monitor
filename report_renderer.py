@@ -188,8 +188,9 @@ def _draw_section_pill(draw, fonts, title, x, y):
 
 def _draw_fund_row(draw, fonts, fund, x, y, content_width):
     row_height = 52
+    row_width = content_width - 24
     draw.rounded_rectangle(
-        [x, y, x + content_width - 24, y + row_height],
+        [x, y, x + row_width, y + row_height],
         radius=12,
         fill="#f8fafc",
         outline="#eef2f7",
@@ -205,9 +206,17 @@ def _draw_fund_row(draw, fonts, fund, x, y, content_width):
     limit = fund.get("limit_display") or fund.get("status") or ""
 
     left_x = x + 44
-    right_x = x + content_width - 42
-    limit_width = _text_width(draw, limit, fonts["limit"])
-    max_name_width = max(220, right_x - left_x - limit_width - 36)
+    right_x = x + row_width - 18
+    available_width = right_x - left_x
+    limit_font = fonts["limit"]
+    max_limit_width = max(180, min(420, available_width - 120))
+    limit_width = _text_width(draw, limit, limit_font)
+    if limit_width > max_limit_width:
+        limit_font = fonts["small"]
+        limit_width = _text_width(draw, limit, limit_font)
+    limit = _truncate_text(draw, limit, limit_font, max_limit_width)
+    limit_width = _text_width(draw, limit, limit_font)
+    max_name_width = max(80, available_width - limit_width - 36)
     display_name = _truncate_text(draw, name, fonts["name"], max_name_width)
 
     draw.text((left_x, y + 11), display_name, fill="#111827", font=fonts["name"])
@@ -215,7 +224,19 @@ def _draw_fund_row(draw, fonts, fund, x, y, content_width):
     if code_x < right_x - limit_width - 30:
         draw.text((code_x, y + 18), f"({code})", fill="#64748b", font=fonts["code"])
 
-    draw.text((right_x - limit_width, y + 14), limit, fill="#111827", font=fonts["limit"])
+    limit_fill = "#111827"
+    if fund.get("change_direction") == "increase":
+        limit_fill = "#15803d"
+    elif fund.get("change_direction") == "decrease":
+        limit_fill = "#b91c1c"
+
+    limit_y = y + (14 if limit_font is fonts["limit"] else 17)
+    draw.text(
+        (right_x - limit_width, limit_y),
+        limit,
+        fill=limit_fill,
+        font=limit_font,
+    )
     return y + row_height
 
 

@@ -7,6 +7,7 @@
 - 爬取天天基金网的基金详情数据。
 - 提取“交易状态”和“单日限额”信息。
 - 实时抓取基金费率，并在日报末尾追加“费率摘要”区。
+- 使用 SQLite 保存每日限额历史，并在限额变化时展示“旧值 -> 新值”。
 - 生成日报并通过抽象通知通道推送。
 - 支持企业微信 Markdown 机器人。
 - 支持钉钉 Markdown 机器人（加签模式），可发送图片版日报。
@@ -19,6 +20,7 @@
 ├── monitor.py        # 主程序
 ├── notifier.py       # 通知通道实现
 ├── report_renderer.py # 图片日报渲染
+├── history.db        # 自动生成的历史数据库
 ├── assets/fonts/     # 内置中文字体子集
 └── requirements.txt  # Python依赖
 ```
@@ -109,6 +111,12 @@
    ```bash
    export REPORT_FONT_PATH="/path/to/font.otf"
    ```
+
+   **历史数据**
+
+   程序使用 `history.db` 保存每日限额快照，表中每个自然日只保留一条记录。生成日报时会与数据库中早于当天的最近一条记录对比；如果限额发生增加或减少，Markdown 和图片日报都会展示类似 `100元 -> 500元 ↑` 的变化。
+
+   旧版 `history.json` 不再读取，也不会迁移。切换到 SQLite 后首次运行数据库为空，因此当日报告不会显示历史变化。
 
    **费率摘要**
 
@@ -210,7 +218,7 @@ python3 monitor.py --prepare-report --report-output .report/latest.json
 python3 monitor.py --send-report .report/latest.json
 ```
 
-该模式适合 CI：先生成并提交 `reports/*.png`，让图片 URL 生效后，再发送钉钉消息。
+该模式适合 CI：先生成并提交 `reports/*.png` 和 `history.db`，让图片 URL 生效后，再发送钉钉消息。
 
 **重新生成字体子集：**
 
@@ -225,9 +233,7 @@ python3 scripts/build_font_subset.py
 **运行测试：**
 
 ```bash
-python3 -m unittest test_notifier.py
-python3 -m unittest test_report_renderer.py
-python3 -m unittest test_monitor.py
+python3 -m unittest test_monitor.py test_report_renderer.py test_notifier.py
 python3 -m py_compile monitor.py notifier.py report_renderer.py test_notifier.py test_report_renderer.py test_monitor.py
 ```
 

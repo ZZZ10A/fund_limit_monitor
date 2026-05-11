@@ -1,4 +1,9 @@
+import json
+import os
+import sqlite3
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from monitor import FundMonitor
@@ -45,10 +50,154 @@ FEE_HTML = """
 """
 
 
+def make_monitor(history_db_path=None):
+    monitor = object.__new__(FundMonitor)
+    monitor.history_db_path = Path(history_db_path) if history_db_path else None
+    if history_db_path:
+        monitor._init_history_db()
+    return monitor
+
+
+def fund(
+    code,
+    limit_text,
+    limit_val,
+    status="开放申购",
+    name=None,
+):
+    return {
+        "code": code,
+        "name": name or f"测试基金{code}A",
+        "status": status,
+        "limit_text": limit_text,
+        "limit_val": limit_val,
+    }
+
+
+def flattened_report_funds(report):
+    funds = {}
+    for section in report["sections"]:
+        for group in section["groups"]:
+            for item in group["funds"]:
+                funds[item["code"]] = item
+    return funds
+
+
+class FundMonitorHistoryTest(unittest.TestCase):
+    def test_history_database_initializes_table(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "history.db"
+            make_monitor(db_path)
+
+            with sqlite3.connect(db_path) as conn:
+                row = conn.execute(
+                    """
+                    SELECT name
+                    FROM sqlite_master
+                    WHERE type = 'table' AND name = 'fund_limit_history'
+                    """
+                ).fetchone()
+
+            self.assertEqual(row[0], "fund_limit_history")
+
+    def test_save_history_upserts_one_row_per_day(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            monitor = make_monitor(Path(tmpdir) / "history.db")
+
+            monitor._save_history("2026-05-11", [fund("270042", "100元", 100)])
+            monitor._save_history("2026-05-11", [fund("270042", "500元", 500)])
+
+            with sqlite3.connect(monitor.history_db_path) as conn:
+                count = conn.execute(
+                    "SELECT COUNT(*) FROM fund_limit_history"
+                ).fetchone()[0]
+                limits_json = conn.execute(
+                    "SELECT limits_json FROM fund_limit_history WHERE date = ?",
+                    ("2026-05-11",),
+                ).fetchone()[0]
+
+            limits = json.loads(limits_json)
+            self.assertEqual(count, 1)
+            self.assertEqual(limits["270042"]["limit_value"], 500)
+            self.assertEqual(limits["270042"]["limit_text"], "500元")
+
+    def test_report_uses_latest_history_before_report_date(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            monitor = make_monitor(Path(tmpdir) / "history.db")
+            monitor._save_history("2026-05-09", [fund("270042", "50元", 50)])
+            monitor._save_history("2026-05-10", [fund("270042", "100元", 100)])
+            monitor._save_history("2026-05-11", [fund("270042", "999元", 999)])
+
+            report = monitor.build_report(
+                [fund("270042", "500元", 500)],
+                generated_at="2026-05-11 13:30:00",
+            )
+            item = flattened_report_funds(report)["270042"]
+
+            self.assertEqual(item["previous_limit_display"], "100元")
+            self.assertEqual(item["current_limit_display"], "500元")
+            self.assertEqual(item["change_direction"], "increase")
+            self.assertEqual(item["change_display"], "100元 -> 500元 ↑")
+            self.assertEqual(item["limit_display"], "100元 -> 500元 ↑")
+
+    def test_empty_database_ignores_legacy_history_json(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            old_cwd = os.getcwd()
+            os.chdir(tmpdir)
+            try:
+                Path("history.json").write_text(
+                    json.dumps({"limits": {"270042": 100}}),
+                    encoding="utf-8",
+                )
+                monitor = make_monitor(Path(tmpdir) / "history.db")
+
+                report = monitor.build_report(
+                    [fund("270042", "500元", 500)],
+                    generated_at="2026-05-11 13:30:00",
+                )
+                item = flattened_report_funds(report)["270042"]
+            finally:
+                os.chdir(old_cwd)
+
+            self.assertEqual(item["previous_limit_display"], "")
+            self.assertEqual(item["change_display"], "")
+            self.assertEqual(item["limit_display"], "500元")
+
+    def test_change_display_handles_increase_decrease_unlimited_and_paused(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            monitor = make_monitor(Path(tmpdir) / "history.db")
+            monitor._save_history(
+                "2026-05-10",
+                [
+                    fund("A", "100元", 100),
+                    fund("B", "500元", 500),
+                    fund("C", "100元", 100),
+                    fund("D", "100元", 100),
+                ],
+            )
+
+            report = monitor.build_report(
+                [
+                    fund("A", "500元", 500),
+                    fund("B", "100元", 100),
+                    fund("C", "None", float("inf")),
+                    fund("D", "None", -1, status="暂停申购"),
+                ],
+                generated_at="2026-05-11 13:30:00",
+            )
+            items = flattened_report_funds(report)
+            markdown = monitor.render_report_markdown(report)
+
+            self.assertEqual(items["A"]["change_display"], "100元 -> 500元 ↑")
+            self.assertEqual(items["B"]["change_display"], "500元 -> 100元 ↓")
+            self.assertEqual(items["C"]["change_display"], "100元 -> 不限 ↑")
+            self.assertEqual(items["D"]["change_display"], "100元 -> 暂停申购 ↓")
+            self.assertIn("测试基金D(D) 🔴 : 100元 -> 暂停申购 ↓", markdown)
+
+
 class FundMonitorFeeTest(unittest.TestCase):
     def setUp(self):
-        self.monitor = object.__new__(FundMonitor)
-        self.monitor.history = {"limits": {}}
+        self.monitor = make_monitor()
 
     def test_parse_fee_info_from_eastmoney_tables(self):
         fee_info = self.monitor._parse_fee_info_html(FEE_HTML)

@@ -36,7 +36,7 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add history.json reports
+          git add history.db reports
           git commit -m "Update report assets [skip ci]" || echo "No changes to commit"
           git push
 

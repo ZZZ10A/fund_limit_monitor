@@ -36,7 +36,11 @@ class ReportRendererTest(unittest.TestCase):
                                     "code": "270042",
                                     "name": "广发纳斯达克100ETF联接A",
                                     "short_name": "广发纳指100",
-                                    "limit_display": "100元 ↑",
+                                    "limit_display": "100元 -> 500元 ↑",
+                                    "previous_limit_display": "100元",
+                                    "current_limit_display": "500元",
+                                    "change_direction": "increase",
+                                    "change_display": "100元 -> 500元 ↑",
                                     "status": "开放申购",
                                     "available": True,
                                 }

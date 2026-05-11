@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import re
+import sqlite3
 import time
 from pathlib import Path
 
@@ -14,7 +15,7 @@ from report_renderer import render_report_image
 
 class FundMonitor:
     CONFIG_FILE = "config.json"
-    HISTORY_FILE = "history.json"
+    HISTORY_DB_FILE = "history.db"
     REPORT_TITLE = "基金申购限额日报 (A类)"
     REQUEST_HEADERS = {
         "User-Agent": (
@@ -26,7 +27,10 @@ class FundMonitor:
 
     def __init__(self):
         self.config = self._load_json(self.CONFIG_FILE)
-        self.history = self._load_json(self.HISTORY_FILE)
+        self.history_db_path = Path(
+            os.environ.get("HISTORY_DB_PATH", self.HISTORY_DB_FILE)
+        )
+        self._init_history_db()
         self.notifier = build_notifier(self.config)
         self.funds_config = self.config.get("funds", [])
 
@@ -46,9 +50,218 @@ class FundMonitor:
         with path.open("w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
-    def _save_history(self, data):
-        with open(self.HISTORY_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+    def _init_history_db(self):
+        db_path = getattr(self, "history_db_path", None)
+        if not db_path:
+            return
+
+        db_path = Path(db_path)
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS fund_limit_history (
+                    date TEXT PRIMARY KEY,
+                    limits_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+
+    def _load_previous_history_limits(self, report_date):
+        db_path = getattr(self, "history_db_path", None)
+        if not db_path:
+            return {}
+
+        try:
+            self._init_history_db()
+            with sqlite3.connect(db_path) as conn:
+                row = conn.execute(
+                    """
+                    SELECT limits_json
+                    FROM fund_limit_history
+                    WHERE date < ?
+                    ORDER BY date DESC
+                    LIMIT 1
+                    """,
+                    (report_date,),
+                ).fetchone()
+        except sqlite3.Error as e:
+            print(f"Error loading history database: {e}")
+            return {}
+
+        if not row:
+            return {}
+
+        try:
+            limits = json.loads(row[0])
+        except json.JSONDecodeError as e:
+            print(f"Error parsing history database record: {e}")
+            return {}
+
+        return limits if isinstance(limits, dict) else {}
+
+    def _save_history(self, report_date, funds_data):
+        db_path = getattr(self, "history_db_path", None)
+        if not db_path:
+            return
+
+        limits = self._build_history_limits(funds_data)
+        limits_json = json.dumps(limits, ensure_ascii=False, sort_keys=True)
+        now = time.strftime("%Y-%m-%d %H:%M:%S")
+
+        self._init_history_db()
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO fund_limit_history
+                    (date, limits_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(date) DO UPDATE SET
+                    limits_json = excluded.limits_json,
+                    updated_at = excluded.updated_at
+                """,
+                (report_date, limits_json, now, now),
+            )
+
+    def _build_history_limits(self, funds_data):
+        return {
+            str(fund["code"]): self._build_history_entry(fund)
+            for fund in funds_data
+        }
+
+    def _build_history_entry(self, fund):
+        limit_val = fund.get("limit_val")
+        limit_value = None
+        if limit_val != float("inf"):
+            limit_value = limit_val
+            if isinstance(limit_value, float) and limit_value.is_integer():
+                limit_value = int(limit_value)
+
+        return {
+            "code": str(fund.get("code", "")),
+            "name": fund.get("name", ""),
+            "status": fund.get("status", ""),
+            "limit_text": fund.get("limit_text", "None"),
+            "limit_value": limit_value,
+            "limit_type": self._limit_type_from_fund(fund),
+        }
+
+    def _limit_type_from_fund(self, fund):
+        status = fund.get("status", "")
+        limit_val = fund.get("limit_val")
+        if "暂停" in status or limit_val is None or limit_val < 0:
+            return "paused"
+        if limit_val == float("inf"):
+            return "unlimited"
+        return "limited"
+
+    def _limit_compare_value(self, history_entry):
+        if history_entry is None:
+            return None
+
+        if not isinstance(history_entry, dict):
+            try:
+                value = float(history_entry)
+            except (TypeError, ValueError):
+                return None
+            return -1 if value <= 0 else value
+
+        limit_type = history_entry.get("limit_type")
+        if limit_type == "unlimited":
+            return float("inf")
+        if limit_type == "paused":
+            return -1
+
+        value = history_entry.get("limit_value")
+        if value is None:
+            return None
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return None
+        return -1 if value <= 0 else value
+
+    def _history_limit_display(self, history_entry):
+        if history_entry is None:
+            return ""
+
+        if not isinstance(history_entry, dict):
+            return self._format_limit_value(history_entry)
+
+        limit_type = history_entry.get("limit_type")
+        limit_text = history_entry.get("limit_text")
+        if limit_type == "unlimited":
+            return "不限"
+        if limit_type == "limited" and limit_text and limit_text != "None":
+            return str(limit_text)
+        if limit_type == "paused":
+            return history_entry.get("status") or "暂停"
+
+        return self._format_limit_value(history_entry.get("limit_value"))
+
+    def _format_limit_value(self, value):
+        if value is None:
+            return ""
+        try:
+            amount = float(value)
+        except (TypeError, ValueError):
+            return str(value)
+
+        if amount == float("inf"):
+            return "不限"
+        if amount < 0:
+            return "暂停"
+        if amount >= 10000 and amount % 10000 == 0:
+            return f"{amount / 10000:g}万元"
+        return f"{amount:g}元"
+
+    def _default_limit_display(self, section_title, fund):
+        limit_val = fund["limit_val"]
+        limit_text = fund["limit_text"]
+
+        if section_title == "可申购" and limit_text != "None":
+            return limit_text
+        if section_title == "可申购" and limit_val == float("inf"):
+            return "不限"
+        if section_title == "不可申购":
+            return fund.get("status") or "暂停"
+        return ""
+
+    def _build_limit_change_fields(self, fund, previous_entry):
+        current_entry = self._build_history_entry(fund)
+        previous_display = self._history_limit_display(previous_entry)
+        current_display = self._history_limit_display(current_entry)
+        previous_value = self._limit_compare_value(previous_entry)
+        current_value = self._limit_compare_value(current_entry)
+
+        fields = {
+            "previous_limit_display": previous_display,
+            "current_limit_display": current_display,
+            "change_direction": "",
+            "change_display": "",
+            "arrow": "",
+        }
+
+        if (
+            previous_value is None
+            or current_value is None
+            or previous_value == current_value
+        ):
+            return fields
+
+        if current_value > previous_value:
+            fields["change_direction"] = "increase"
+            fields["arrow"] = "↑"
+        else:
+            fields["change_direction"] = "decrease"
+            fields["arrow"] = "↓"
+
+        fields["change_display"] = (
+            f"{previous_display} -> {current_display} {fields['arrow']}"
+        )
+        return fields
 
     def _parse_amount(self, text):
         """Parse amount text to numeric value."""
@@ -344,6 +557,7 @@ class FundMonitor:
             reverse=True,
         )
         generated_at = generated_at or time.strftime("%Y-%m-%d %H:%M:%S")
+        report_date = generated_at[:10]
 
         groups = {
             "可申购": {"纳斯达克100": [], "标普500": [], "其他": []},
@@ -360,7 +574,7 @@ class FundMonitor:
             group_name = idx_type if idx_type in groups[category] else "其他"
             groups[category][group_name].append(info)
 
-        last_limits = self.history.get("limits", {})
+        last_limits = self._load_previous_history_limits(report_date)
         sections = []
 
         for title in ["可申购", "不可申购"]:
@@ -401,24 +615,22 @@ class FundMonitor:
         limit_val = fund["limit_val"]
         limit_text = fund["limit_text"]
 
-        arrow = ""
-        prev = last_limits.get(code)
-        if prev is not None:
-            if limit_val > prev:
-                arrow = " ↑"
-            elif limit_val < prev:
-                arrow = " ↓"
+        change_fields = self._build_limit_change_fields(
+            fund,
+            last_limits.get(str(code)),
+        )
+        default_limit_display = self._default_limit_display(section_title, fund)
+        limit_display = change_fields["change_display"] or default_limit_display
 
-        limit_display = ""
         markdown_limit_display = ""
         if section_title == "可申购" and limit_text != "None":
-            limit_display = f"{limit_text}{arrow}"
             markdown_limit_display = limit_display
         elif section_title == "可申购" and limit_val == float("inf"):
-            limit_display = f"不限{arrow}"
-            markdown_limit_display = limit_display if arrow else ""
-        elif section_title == "不可申购":
-            limit_display = fund.get("status") or "暂停"
+            markdown_limit_display = (
+                limit_display if change_fields["change_display"] else ""
+            )
+        elif change_fields["change_display"]:
+            markdown_limit_display = limit_display
 
         return {
             "code": code,
@@ -429,8 +641,8 @@ class FundMonitor:
             "limit_val": limit_val,
             "limit_display": limit_display,
             "markdown_limit_display": markdown_limit_display,
-            "arrow": arrow.strip(),
             "available": section_title == "可申购",
+            **change_fields,
         }
 
     def _build_fee_groups(self, funds_data):
@@ -482,7 +694,7 @@ class FundMonitor:
                     emoji = "🔴" if not fund["available"] else ""
                     line = f"{fund['short_name']}({fund['code']}) {emoji}"
 
-                    if fund["available"] and fund["markdown_limit_display"]:
+                    if fund["markdown_limit_display"]:
                         line += f" : {fund['markdown_limit_display']}"
 
                     report_lines.append(line.strip())
@@ -559,8 +771,7 @@ class FundMonitor:
         if report_output:
             self._save_json(report_output, payload)
 
-        curr_limits = {f["code"]: f["limit_val"] for f in funds_data}
-        self._save_history({"date": time.strftime("%Y-%m-%d"), "limits": curr_limits})
+        self._save_history(report["generated_at"][:10], funds_data)
         return payload
 
     def send_report_payload(self, report_file):

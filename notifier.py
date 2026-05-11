@@ -89,11 +89,29 @@ class DingTalkNotifier(Notifier):
                 headers={"Content-Type": "application/json"},
                 timeout=10,
             )
-            print(f"DingTalk notification sent. Status: {resp.status_code}")
-            return 200 <= resp.status_code < 300
+            return self._is_success_response(resp)
         except Exception as e:
             print(f"Failed to send DingTalk notification: {e}")
             return False
+
+    def _is_success_response(self, resp):
+        status_ok = 200 <= resp.status_code < 300
+        try:
+            response_body = resp.json()
+        except ValueError:
+            response_body = None
+
+        if isinstance(response_body, dict) and "errcode" in response_body:
+            errcode = response_body.get("errcode")
+            errmsg = response_body.get("errmsg", "")
+            print(
+                "DingTalk notification response. "
+                f"Status: {resp.status_code}, errcode: {errcode}, errmsg: {errmsg}"
+            )
+            return status_ok and errcode == 0
+
+        print(f"DingTalk notification sent. Status: {resp.status_code}")
+        return status_ok
 
     def _signed_webhook_url(self):
         timestamp = str(int(time.time() * 1000))

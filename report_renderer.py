@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -11,14 +12,17 @@ REPORT_STATIC_TEXT = (
     "基金申购限额日报A类时间可申购不可申购纳斯达克100标普500其他"
     "不限暂停开放申购赎回定投转换转入转出交易状态限额单日累计购买"
     "上限金额人民币元万元千万亿元大额恢复关闭封闭认购未知"
-    "费率摘要运作费用管理托管销售服务优惠银行卡活期宝合计每年"
-    "持有天获取失败小于大于等于"
+    "费率摘要名称价差信息运作费率运作费用管理托管销售服务优惠银行卡活期宝合计每年"
+    "持有天年月日以上以内不足满获取失败小于大于等于"
     "华夏博时华安嘉实建信大成招商华宝华泰天弘摩根南方易方达"
     "广发国泰精选股票发起式指数联接ETFLOF"
     "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
     "（）()[]【】<>《》:：；,，.。/ -_#%+*="
     "↑↓"
 )
+
+INDEX_TABLE_TITLES = ("纳斯达克100", "标普500")
+TABLE_HEADERS = ("名称", "价差信息", "运作费率", "申购优惠", "赎回费率")
 
 
 def build_font_subset_text(config):
@@ -47,19 +51,18 @@ def render_report_image(report, output_path, font_path=None):
     fonts = {
         "title": _load_font(font_path, 40),
         "meta": _load_font(font_path, 20),
-        "section": _load_font(font_path, 28),
-        "group": _load_font(font_path, 22),
-        "name": _load_font(font_path, 24),
-        "code": _load_font(font_path, 18),
-        "limit": _load_font(font_path, 22),
-        "small": _load_font(font_path, 18),
+        "table_title": _load_font(font_path, 28),
+        "summary": _load_font(font_path, 18),
+        "header": _load_font(font_path, 18),
+        "cell": _load_font(font_path, 17),
     }
 
-    width = 960
+    width = 1400
     padding = 44
     content_width = width - padding * 2
-    rows = _flatten_report_rows(report)
-    height = _measure_height(rows, padding)
+    tables = _build_index_tables(report)
+    measure_draw = ImageDraw.Draw(Image.new("RGB", (width, 1), "#ffffff"))
+    height = _measure_height(tables, measure_draw, fonts, padding, content_width)
 
     image = Image.new("RGB", (width, height), "#f7f9fc")
     draw = ImageDraw.Draw(image)
@@ -73,7 +76,12 @@ def render_report_image(report, output_path, font_path=None):
     )
 
     y = padding + 16
-    draw.text((padding + 12, y), report["title"], fill="#172033", font=fonts["title"])
+    draw.text(
+        (padding + 12, y),
+        report["title"],
+        fill="#172033",
+        font=fonts["title"],
+    )
     y += 54
     draw.text(
         (padding + 14, y),
@@ -83,34 +91,16 @@ def render_report_image(report, output_path, font_path=None):
     )
     y += 46
 
-    for row in rows:
-        kind = row["kind"]
-        if kind == "section":
-            _draw_section_pill(draw, fonts, row["title"], padding + 12, y)
-            y += 56
-        elif kind == "group":
-            draw.text((padding + 14, y), row["title"], fill="#334155", font=fonts["group"])
-            y += 36
-        elif kind == "fund":
-            y = _draw_fund_row(draw, fonts, row["fund"], padding + 14, y, content_width)
-            y += 10
-        elif kind == "fee_section":
-            _draw_section_pill(draw, fonts, row["title"], padding + 12, y)
-            y += 56
-        elif kind == "fee_group":
-            draw.text((padding + 14, y), row["title"], fill="#334155", font=fonts["group"])
-            y += 34
-        elif kind == "fee_header":
-            y = _draw_fee_table_header(draw, fonts, padding + 14, y, content_width)
-        elif kind == "fee_fund":
-            y = _draw_fee_fund_row(
-                draw,
-                fonts,
-                row["fund"],
-                padding + 14,
-                y,
-                content_width,
-            )
+    for table in tables:
+        y = _draw_index_table(
+            draw,
+            fonts,
+            table,
+            padding + 12,
+            y,
+            content_width - 24,
+        )
+        y += 30
 
     image.save(output_path, "PNG")
     return output_path
@@ -120,266 +110,352 @@ def _load_font(font_path, size):
     return ImageFont.truetype(str(font_path), size=size)
 
 
-def _flatten_report_rows(report):
-    rows = []
+def _build_index_tables(report):
+    fee_by_code = {}
+    for group in report.get("fee_groups", []):
+        for fund in group.get("funds", []):
+            code = str(fund.get("code", ""))
+            if code:
+                fee_by_code[code] = fund
+
+    grouped = {
+        title: {"可申购": [], "不可申购": []}
+        for title in INDEX_TABLE_TITLES
+    }
     for section in report.get("sections", []):
-        rows.append({"kind": "section", "title": section["title"]})
+        availability = section.get("title", "")
+        if availability not in ("可申购", "不可申购"):
+            continue
+
         for group in section.get("groups", []):
-            rows.append({"kind": "group", "title": group["title"]})
+            index_title = _normalize_index_title(group.get("title", ""))
+            if not index_title:
+                continue
+
             for fund in group.get("funds", []):
-                rows.append({"kind": "fund", "fund": fund})
-    fee_groups = report.get("fee_groups", [])
-    if fee_groups:
-        rows.append({"kind": "fee_section", "title": "费率摘要"})
-        for group in fee_groups:
-            rows.append({"kind": "fee_group", "title": group["title"]})
-            rows.append({"kind": "fee_header"})
-            for fund in group.get("funds", []):
-                rows.append({"kind": "fee_fund", "fund": fund})
-    return rows
+                code = str(fund.get("code", ""))
+                grouped[index_title][availability].append(
+                    _build_table_row(
+                        fund,
+                        availability,
+                        fee_by_code.get(code, {}),
+                    )
+                )
+
+    tables = []
+    for title in INDEX_TABLE_TITLES:
+        available_rows = grouped[title]["可申购"]
+        unavailable_rows = grouped[title]["不可申购"]
+        rows = available_rows + unavailable_rows
+        if not rows:
+            continue
+
+        tables.append(
+            {
+                "title": title,
+                "summary": (
+                    f"可申购: {len(available_rows)} / "
+                    f"不可申购: {len(unavailable_rows)}"
+                ),
+                "rows": rows,
+            }
+        )
+    return tables
 
 
-def _measure_height(rows, padding):
+def _normalize_index_title(title):
+    title = str(title or "")
+    if "纳斯达克" in title or "纳指" in title:
+        return "纳斯达克100"
+    if "标普" in title:
+        return "标普500"
+    return ""
+
+
+def _build_table_row(fund, availability, fee):
+    code = str(fund.get("code", ""))
+    fee_error = fee.get("fee_error") or fund.get("fee_error", "")
+
+    if fee_error:
+        operation = fee_error
+        subscription = "--"
+        redemption = "--"
+    else:
+        operation = (
+            fee.get("operation_display")
+            or fund.get("operation_display")
+            or "--"
+        )
+        subscription = (
+            fee.get("subscription_display")
+            or fund.get("subscription_display")
+            or "--"
+        )
+        redemption = (
+            fee.get("redemption_display")
+            or fund.get("redemption_display")
+            or "--"
+        )
+
+    return {
+        "name": f"{fund.get('name') or fund.get('short_name') or ''}({code})",
+        "spread": _spread_display(fund, availability),
+        "operation": _operation_fee_display(operation),
+        "subscription": _subscription_fee_display(subscription),
+        "redemption": _redemption_fee_display(redemption),
+        "availability": availability,
+        "change_direction": fund.get("change_direction", ""),
+        "fee_error": bool(fee_error),
+    }
+
+
+def _spread_display(fund, availability):
+    detail = fund.get("limit_display") or fund.get("status") or ""
+    if not detail or detail == "None":
+        detail = "不限" if availability == "可申购" else "暂停"
+    if detail == availability:
+        return availability
+    return f"{availability}\n{detail}"
+
+
+def _operation_fee_display(value):
+    value = str(value or "--").strip()
+    if value in ("", "--"):
+        return "--"
+    value = re.sub(r"\s+", " ", value)
+    labels = ("托管", "销售", "合计")
+    if any(f" {label}" in value for label in labels):
+        value = re.sub(r"\s+(?=(?:托管|销售|合计))", "\n", value).strip()
+    else:
+        value = re.sub(r"(?<!^)(?=(?:托管|销售|合计))", "\n", value).strip()
+
+    items = [item.strip() for item in value.splitlines() if item.strip()]
+    return "\n".join(
+        " ".join(items[index : index + 2])
+        for index in range(0, len(items), 2)
+    )
+
+
+def _subscription_fee_display(value):
+    value = str(value or "--").strip()
+    if value in ("", "--"):
+        return "--"
+    value = re.sub(r"\s+", " ", value)
+    parts = value.split(" ", 1)
+    if len(parts) == 2:
+        return f"{parts[0]}\n{parts[1]}"
+    return value
+
+
+def _redemption_fee_display(value):
+    value = str(value or "--").strip()
+    if value in ("", "--"):
+        return "--"
+    value = re.sub(r"\s+", " ", value)
+    return re.sub(r"\s*/\s*", "\n", value)
+
+
+def _measure_height(tables, draw, fonts, padding, content_width):
     height = padding * 2 + 126
-    for row in rows:
-        if row["kind"] == "section":
-            height += 56
-        elif row["kind"] == "group":
-            height += 36
-        elif row["kind"] == "fund":
-            height += 62
-        elif row["kind"] == "fee_section":
-            height += 56
-        elif row["kind"] == "fee_group":
-            height += 34
-        elif row["kind"] == "fee_header":
-            height += 34
-        elif row["kind"] == "fee_fund":
-            height += 66
+    table_width = content_width - 24
+    for table in tables:
+        height += 44
+        height += 40
+        for row in table["rows"]:
+            height += _measure_table_row(draw, fonts, row, table_width)
+        height += 30
     return max(height, 360)
 
 
-def _draw_section_pill(draw, fonts, title, x, y):
-    colors = {
-        "可申购": "#15803d",
-        "不可申购": "#b91c1c",
-        "费率摘要": "#2563eb",
-    }
-    color = colors.get(title, "#334155")
-    pill_height = 38
-    pill_width = {
-        "可申购": 126,
-        "不可申购": 150,
-        "费率摘要": 150,
-    }.get(title, 150)
-    draw.rounded_rectangle(
-        [x, y, x + pill_width, y + pill_height],
-        radius=19,
-        fill=color,
-    )
-    _draw_centered_text(
-        draw,
-        title,
-        [x, y, x + pill_width, y + pill_height],
-        fonts["section"],
-        "#ffffff",
-    )
-
-
-def _draw_fund_row(draw, fonts, fund, x, y, content_width):
-    row_height = 52
-    row_width = content_width - 24
-    draw.rounded_rectangle(
-        [x, y, x + row_width, y + row_height],
-        radius=12,
-        fill="#f8fafc",
-        outline="#eef2f7",
-        width=1,
-    )
-
-    available = fund.get("available", False)
-    dot_color = "#16a34a" if available else "#dc2626"
-    draw.ellipse([x + 16, y + 19, x + 30, y + 33], fill=dot_color)
-
-    name = fund.get("short_name") or fund.get("name") or ""
-    code = str(fund.get("code", ""))
-    limit = fund.get("limit_display") or fund.get("status") or ""
-
-    left_x = x + 44
-    right_x = x + row_width - 18
-    available_width = right_x - left_x
-    limit_font = fonts["limit"]
-    max_limit_width = max(180, min(420, available_width - 120))
-    limit_width = _text_width(draw, limit, limit_font)
-    if limit_width > max_limit_width:
-        limit_font = fonts["small"]
-        limit_width = _text_width(draw, limit, limit_font)
-    limit = _truncate_text(draw, limit, limit_font, max_limit_width)
-    limit_width = _text_width(draw, limit, limit_font)
-    max_name_width = max(80, available_width - limit_width - 36)
-    display_name = _truncate_text(draw, name, fonts["name"], max_name_width)
-
-    draw.text((left_x, y + 11), display_name, fill="#111827", font=fonts["name"])
-    code_x = left_x + _text_width(draw, display_name, fonts["name"]) + 10
-    if code_x < right_x - limit_width - 30:
-        draw.text((code_x, y + 18), f"({code})", fill="#64748b", font=fonts["code"])
-
-    limit_fill = "#111827"
-    if fund.get("change_direction") == "increase":
-        limit_fill = "#15803d"
-    elif fund.get("change_direction") == "decrease":
-        limit_fill = "#b91c1c"
-
-    limit_y = y + (14 if limit_font is fonts["limit"] else 17)
+def _draw_index_table(draw, fonts, table, x, y, table_width):
+    draw.text((x, y), table["title"], fill="#172033", font=fonts["table_title"])
+    summary_width = _text_width(draw, table["summary"], fonts["summary"])
     draw.text(
-        (right_x - limit_width, limit_y),
-        limit,
-        fill=limit_fill,
-        font=limit_font,
+        (x + table_width - summary_width, y + 8),
+        table["summary"],
+        fill="#64748b",
+        font=fonts["summary"],
     )
-    return y + row_height
+    y += 44
+    y = _draw_table_header(draw, fonts, x, y, table_width)
+
+    for index, row in enumerate(table["rows"]):
+        row_height = _measure_table_row(draw, fonts, row, table_width)
+        y = _draw_table_row(
+            draw,
+            fonts,
+            row,
+            x,
+            y,
+            table_width,
+            row_height,
+            index,
+        )
+    return y
 
 
-def _draw_fee_table_header(draw, fonts, x, y, content_width):
-    row_height = 34
-    row_width = content_width - 24
-    columns = _fee_table_columns(row_width)
+def _draw_table_header(draw, fonts, x, y, table_width):
+    row_height = 40
+    columns = _table_columns(table_width)
     draw.rounded_rectangle(
-        [x, y, x + row_width, y + row_height],
+        [x, y, x + table_width, y + row_height],
         radius=10,
         fill="#eff6ff",
         outline="#dbeafe",
         width=1,
     )
 
-    labels = ["基金", "运作费用", "申购优惠", "赎回费率"]
     offset = x
-    for i, (label, width) in enumerate(zip(labels, columns)):
+    for i, (label, width) in enumerate(zip(TABLE_HEADERS, columns)):
         if i > 0:
             draw.line([offset, y, offset, y + row_height], fill="#dbeafe", width=1)
-        draw.text((offset + 10, y + 7), label, fill="#1d4ed8", font=fonts["small"])
+        draw.text((offset + 10, y + 9), label, fill="#1d4ed8", font=fonts["header"])
         offset += width
 
     return y + row_height
 
 
-def _draw_fee_fund_row(draw, fonts, fund, x, y, content_width):
-    row_height = 66
-    row_width = content_width - 24
-    columns = _fee_table_columns(row_width)
+def _draw_table_row(draw, fonts, row, x, y, table_width, row_height, index):
+    columns = _table_columns(table_width)
+    fill = "#ffffff" if index % 2 == 0 else "#f8fafc"
     draw.rectangle(
-        [x, y, x + row_width, y + row_height],
-        fill="#f8fafc",
+        [x, y, x + table_width, y + row_height],
+        fill=fill,
         outline="#eef2f7",
         width=1,
     )
 
-    values = [
-        f"{fund.get('short_name') or fund.get('name') or ''}({fund.get('code', '')})",
-        fund.get("operation_display") or "--",
-        fund.get("subscription_display") or "--",
-        fund.get("redemption_display") or "--",
-    ]
-
-    fills = ["#111827", "#475569", "#475569", "#475569"]
-
-    if fund.get("fee_error"):
-        values = [values[0], fund["fee_error"], "--", "--"]
-        fills = ["#111827", "#b91c1c", "#475569", "#475569"]
+    stripe_fill = "#16a34a" if row["availability"] == "可申购" else "#dc2626"
+    draw.rectangle([x, y, x + 5, y + row_height], fill=stripe_fill)
 
     offset = x
-    for i, (value, width) in enumerate(zip(values, columns)):
+    for i, (value, width) in enumerate(zip(_table_values(row), columns)):
         if i > 0:
             draw.line([offset, y, offset, y + row_height], fill="#eef2f7", width=1)
         _draw_wrapped_cell(
             draw,
             str(value),
-            fonts["small"],
+            fonts["cell"],
             offset + 8,
             y + 10,
             width - 16,
-            fills[i],
-            max_lines=2,
-            line_height=21,
+            _table_cell_fill(row, i),
+            line_height=22,
         )
         offset += width
 
     return y + row_height
 
 
-def _fee_table_columns(row_width):
-    fund_width = 182
-    subscription_width = 138
-    redemption_width = 220
-    operation_width = row_width - fund_width - subscription_width - redemption_width
-    return [fund_width, operation_width, subscription_width, redemption_width]
+def _measure_table_row(draw, fonts, row, table_width):
+    columns = _table_columns(table_width)
+    max_lines = 1
+    for value, width in zip(_table_values(row), columns):
+        max_lines = max(
+            max_lines,
+            len(_wrap_text(draw, value, fonts["cell"], width - 16)),
+        )
+    return max(58, max_lines * 22 + 20)
 
 
-def _draw_wrapped_cell(draw, text, font, x, y, max_width, fill, max_lines, line_height):
-    lines = _wrap_text(draw, text, font, max_width, max_lines)
+def _table_columns(table_width):
+    name_width = 260
+    spread_width = 190
+    operation_width = 330
+    subscription_width = 180
+    redemption_width = table_width - (
+        name_width + spread_width + operation_width + subscription_width
+    )
+    return [
+        name_width,
+        spread_width,
+        operation_width,
+        subscription_width,
+        redemption_width,
+    ]
+
+
+def _table_values(row):
+    return [
+        row["name"],
+        row["spread"],
+        row["operation"],
+        row["subscription"],
+        row["redemption"],
+    ]
+
+
+def _table_cell_fill(row, index):
+    if index == 1:
+        if row["change_direction"] == "increase":
+            return "#15803d"
+        if row["change_direction"] == "decrease":
+            return "#b91c1c"
+        return "#15803d" if row["availability"] == "可申购" else "#b91c1c"
+    if index == 2 and row["fee_error"]:
+        return "#b91c1c"
+    return "#111827" if index == 0 else "#475569"
+
+
+def _draw_wrapped_cell(draw, text, font, x, y, max_width, fill, line_height):
+    lines = _wrap_text(draw, text, font, max_width)
     for i, line in enumerate(lines):
         draw.text((x, y + i * line_height), line, fill=fill, font=font)
 
 
-def _wrap_text(draw, text, font, max_width, max_lines):
+def _wrap_text(draw, text, font, max_width):
     text = str(text or "")
-    if _text_width(draw, text, font) <= max_width:
-        return [text]
+    lines = []
+    for paragraph in text.split("\n"):
+        if paragraph == "":
+            lines.append("")
+            continue
+        lines.extend(_wrap_paragraph(draw, paragraph, font, max_width))
+    return lines or [""]
 
-    tokens = text.split(" ")
+
+def _wrap_paragraph(draw, paragraph, font, max_width):
+    tokens = paragraph.split(" ")
+    if len(tokens) == 1:
+        return _wrap_long_token(draw, paragraph, font, max_width)
+
     lines = []
     current = ""
-
     for token in tokens:
+        if token == "":
+            continue
+
         candidate = token if not current else f"{current} {token}"
+        if not current:
+            current = token
+            continue
         if _text_width(draw, candidate, font) <= max_width:
             current = candidate
             continue
 
-        if current:
-            lines.append(current)
-            current = token
+        lines.extend(_wrap_long_token(draw, current, font, max_width))
+        current = token
+
+    if current:
+        lines.extend(_wrap_long_token(draw, current, font, max_width))
+    return lines or [""]
+
+
+def _wrap_long_token(draw, token, font, max_width):
+    lines = []
+    current = ""
+    for char in token:
+        candidate = current + char
+        if current and _text_width(draw, candidate, font) > max_width:
+            lines.append(current.rstrip())
+            current = char.lstrip()
         else:
-            current = token
+            current = candidate
 
-        if len(lines) == max_lines:
-            break
-
-    if current and len(lines) < max_lines:
-        lines.append(current)
-
-    if len(lines) > max_lines:
-        lines = lines[:max_lines]
-
-    if lines:
-        lines[-1] = _truncate_text(draw, lines[-1], font, max_width)
-    return lines or [_truncate_text(draw, text, font, max_width)]
-
-
-def _truncate_text(draw, text, font, max_width):
-    if _text_width(draw, text, font) <= max_width:
-        return text
-
-    ellipsis = "..."
-    available = max_width - _text_width(draw, ellipsis, font)
-    truncated = ""
-    for char in text:
-        if _text_width(draw, truncated + char, font) > available:
-            break
-        truncated += char
-    return truncated + ellipsis
+    if current:
+        lines.append(current.rstrip())
+    return lines or [""]
 
 
 def _text_width(draw, text, font):
     return draw.textlength(str(text), font=font)
-
-
-def _draw_centered_text(draw, text, box, font, fill):
-    text = str(text)
-    left, top, right, bottom = box
-    bbox = draw.textbbox((0, 0), text, font=font)
-    text_width = bbox[2] - bbox[0]
-    text_height = bbox[3] - bbox[1]
-    x = left + ((right - left) - text_width) / 2 - bbox[0]
-    y = top + ((bottom - top) - text_height) / 2 - bbox[1]
-    draw.text((x, y), text, fill=fill, font=font)

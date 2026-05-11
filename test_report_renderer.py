@@ -63,6 +63,36 @@ class ReportRendererTest(unittest.TestCase):
                     ],
                 },
             ],
+            "fee_groups": [
+                {
+                    "title": "纳斯达克100",
+                    "funds": [
+                        {
+                            "code": "270042",
+                            "name": "广发纳斯达克100ETF联接A",
+                            "short_name": "广发纳指100",
+                            "operation_display": "管理0.80% 托管0.20% 销售0.00% 合计1.00%/年",
+                            "subscription_display": "<100万元 0.13%",
+                            "redemption_display": "<7天 1.50% / >=2年 0.00%",
+                            "fee_error": "",
+                        }
+                    ],
+                },
+                {
+                    "title": "标普500",
+                    "funds": [
+                        {
+                            "code": "161125",
+                            "name": "易方达标普500指数A",
+                            "short_name": "易方达标普500",
+                            "operation_display": "",
+                            "subscription_display": "",
+                            "redemption_display": "",
+                            "fee_error": "费率获取失败",
+                        }
+                    ],
+                },
+            ],
         }
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -73,7 +103,7 @@ class ReportRendererTest(unittest.TestCase):
             with Image.open(output) as image:
                 self.assertEqual(image.format, "PNG")
                 self.assertGreaterEqual(image.width, 900)
-                self.assertGreater(image.height, 300)
+                self.assertGreater(image.height, 500)
 
     @unittest.skipIf(TTFont is None, "fontTools is required for font coverage checks")
     def test_bundled_font_covers_current_report_text(self):

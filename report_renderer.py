@@ -11,10 +11,12 @@ REPORT_STATIC_TEXT = (
     "基金申购限额日报A类时间可申购不可申购纳斯达克100标普500其他"
     "不限暂停开放申购赎回定投转换转入转出交易状态限额单日累计购买"
     "上限金额人民币元万元千万亿元大额恢复关闭封闭认购未知"
+    "费率摘要运作费用管理托管销售服务优惠银行卡活期宝合计每年"
+    "持有天获取失败小于大于等于"
     "华夏博时华安嘉实建信大成招商华宝华泰天弘摩根南方易方达"
     "广发国泰精选股票发起式指数联接ETFLOF"
     "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-    "（）()[]【】<>《》:：,，.。/ -_#%+*"
+    "（）()[]【】<>《》:：；,，.。/ -_#%+*="
     "↑↓"
 )
 
@@ -84,23 +86,7 @@ def render_report_image(report, output_path, font_path=None):
     for row in rows:
         kind = row["kind"]
         if kind == "section":
-            color = "#15803d" if row["title"] == "可申购" else "#b91c1c"
-            pill_x = padding + 12
-            pill_y = y
-            pill_height = 38
-            pill_width = 150 if row["title"] == "不可申购" else 126
-            draw.rounded_rectangle(
-                [pill_x, pill_y, pill_x + pill_width, pill_y + pill_height],
-                radius=19,
-                fill=color,
-            )
-            _draw_centered_text(
-                draw,
-                row["title"],
-                [pill_x, pill_y, pill_x + pill_width, pill_y + pill_height],
-                fonts["section"],
-                "#ffffff",
-            )
+            _draw_section_pill(draw, fonts, row["title"], padding + 12, y)
             y += 56
         elif kind == "group":
             draw.text((padding + 14, y), row["title"], fill="#334155", font=fonts["group"])
@@ -108,6 +94,23 @@ def render_report_image(report, output_path, font_path=None):
         elif kind == "fund":
             y = _draw_fund_row(draw, fonts, row["fund"], padding + 14, y, content_width)
             y += 10
+        elif kind == "fee_section":
+            _draw_section_pill(draw, fonts, row["title"], padding + 12, y)
+            y += 56
+        elif kind == "fee_group":
+            draw.text((padding + 14, y), row["title"], fill="#334155", font=fonts["group"])
+            y += 34
+        elif kind == "fee_header":
+            y = _draw_fee_table_header(draw, fonts, padding + 14, y, content_width)
+        elif kind == "fee_fund":
+            y = _draw_fee_fund_row(
+                draw,
+                fonts,
+                row["fund"],
+                padding + 14,
+                y,
+                content_width,
+            )
 
     image.save(output_path, "PNG")
     return output_path
@@ -125,6 +128,14 @@ def _flatten_report_rows(report):
             rows.append({"kind": "group", "title": group["title"]})
             for fund in group.get("funds", []):
                 rows.append({"kind": "fund", "fund": fund})
+    fee_groups = report.get("fee_groups", [])
+    if fee_groups:
+        rows.append({"kind": "fee_section", "title": "费率摘要"})
+        for group in fee_groups:
+            rows.append({"kind": "fee_group", "title": group["title"]})
+            rows.append({"kind": "fee_header"})
+            for fund in group.get("funds", []):
+                rows.append({"kind": "fee_fund", "fund": fund})
     return rows
 
 
@@ -137,7 +148,42 @@ def _measure_height(rows, padding):
             height += 36
         elif row["kind"] == "fund":
             height += 62
+        elif row["kind"] == "fee_section":
+            height += 56
+        elif row["kind"] == "fee_group":
+            height += 34
+        elif row["kind"] == "fee_header":
+            height += 34
+        elif row["kind"] == "fee_fund":
+            height += 66
     return max(height, 360)
+
+
+def _draw_section_pill(draw, fonts, title, x, y):
+    colors = {
+        "可申购": "#15803d",
+        "不可申购": "#b91c1c",
+        "费率摘要": "#2563eb",
+    }
+    color = colors.get(title, "#334155")
+    pill_height = 38
+    pill_width = {
+        "可申购": 126,
+        "不可申购": 150,
+        "费率摘要": 150,
+    }.get(title, 150)
+    draw.rounded_rectangle(
+        [x, y, x + pill_width, y + pill_height],
+        radius=19,
+        fill=color,
+    )
+    _draw_centered_text(
+        draw,
+        title,
+        [x, y, x + pill_width, y + pill_height],
+        fonts["section"],
+        "#ffffff",
+    )
 
 
 def _draw_fund_row(draw, fonts, fund, x, y, content_width):
@@ -171,6 +217,122 @@ def _draw_fund_row(draw, fonts, fund, x, y, content_width):
 
     draw.text((right_x - limit_width, y + 14), limit, fill="#111827", font=fonts["limit"])
     return y + row_height
+
+
+def _draw_fee_table_header(draw, fonts, x, y, content_width):
+    row_height = 34
+    row_width = content_width - 24
+    columns = _fee_table_columns(row_width)
+    draw.rounded_rectangle(
+        [x, y, x + row_width, y + row_height],
+        radius=10,
+        fill="#eff6ff",
+        outline="#dbeafe",
+        width=1,
+    )
+
+    labels = ["基金", "运作费用", "申购优惠", "赎回费率"]
+    offset = x
+    for i, (label, width) in enumerate(zip(labels, columns)):
+        if i > 0:
+            draw.line([offset, y, offset, y + row_height], fill="#dbeafe", width=1)
+        draw.text((offset + 10, y + 7), label, fill="#1d4ed8", font=fonts["small"])
+        offset += width
+
+    return y + row_height
+
+
+def _draw_fee_fund_row(draw, fonts, fund, x, y, content_width):
+    row_height = 66
+    row_width = content_width - 24
+    columns = _fee_table_columns(row_width)
+    draw.rectangle(
+        [x, y, x + row_width, y + row_height],
+        fill="#f8fafc",
+        outline="#eef2f7",
+        width=1,
+    )
+
+    values = [
+        f"{fund.get('short_name') or fund.get('name') or ''}({fund.get('code', '')})",
+        fund.get("operation_display") or "--",
+        fund.get("subscription_display") or "--",
+        fund.get("redemption_display") or "--",
+    ]
+
+    fills = ["#111827", "#475569", "#475569", "#475569"]
+
+    if fund.get("fee_error"):
+        values = [values[0], fund["fee_error"], "--", "--"]
+        fills = ["#111827", "#b91c1c", "#475569", "#475569"]
+
+    offset = x
+    for i, (value, width) in enumerate(zip(values, columns)):
+        if i > 0:
+            draw.line([offset, y, offset, y + row_height], fill="#eef2f7", width=1)
+        _draw_wrapped_cell(
+            draw,
+            str(value),
+            fonts["small"],
+            offset + 8,
+            y + 10,
+            width - 16,
+            fills[i],
+            max_lines=2,
+            line_height=21,
+        )
+        offset += width
+
+    return y + row_height
+
+
+def _fee_table_columns(row_width):
+    fund_width = 182
+    subscription_width = 138
+    redemption_width = 220
+    operation_width = row_width - fund_width - subscription_width - redemption_width
+    return [fund_width, operation_width, subscription_width, redemption_width]
+
+
+def _draw_wrapped_cell(draw, text, font, x, y, max_width, fill, max_lines, line_height):
+    lines = _wrap_text(draw, text, font, max_width, max_lines)
+    for i, line in enumerate(lines):
+        draw.text((x, y + i * line_height), line, fill=fill, font=font)
+
+
+def _wrap_text(draw, text, font, max_width, max_lines):
+    text = str(text or "")
+    if _text_width(draw, text, font) <= max_width:
+        return [text]
+
+    tokens = text.split(" ")
+    lines = []
+    current = ""
+
+    for token in tokens:
+        candidate = token if not current else f"{current} {token}"
+        if _text_width(draw, candidate, font) <= max_width:
+            current = candidate
+            continue
+
+        if current:
+            lines.append(current)
+            current = token
+        else:
+            current = token
+
+        if len(lines) == max_lines:
+            break
+
+    if current and len(lines) < max_lines:
+        lines.append(current)
+
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+
+    if lines:
+        lines[-1] = _truncate_text(draw, lines[-1], font, max_width)
+    return lines or [_truncate_text(draw, text, font, max_width)]
 
 
 def _truncate_text(draw, text, font, max_width):

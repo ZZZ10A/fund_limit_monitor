@@ -6,6 +6,7 @@
 
 - 爬取天天基金网的基金详情数据。
 - 提取“交易状态”和“单日限额”信息。
+- 实时抓取基金费率，并在日报末尾追加“费率摘要”区。
 - 生成日报并通过抽象通知通道推送。
 - 支持企业微信 Markdown 机器人。
 - 支持钉钉 Markdown 机器人（加签模式），可发送图片版日报。
@@ -109,6 +110,22 @@
    export REPORT_FONT_PATH="/path/to/font.otf"
    ```
 
+   **费率摘要**
+
+   日报会从天天基金基金档案费率页实时抓取每只基金的费率信息，例如：
+
+   ```text
+   https://fundf10.eastmoney.com/jjfl_270042.html
+   ```
+
+   报告末尾会新增“费率摘要”区，并以表格形式在 Markdown 和图片日报中展示。当前展示口径为：
+
+   - 运作费用：管理费率、托管费率、销售服务费率，以及可解析百分比的年度合计。
+   - 申购费率：最低金额档的天天基金优惠费率，优先取“银行卡购买”列。
+   - 赎回费率：第一条和最后一条持有期档位。
+
+   若某只基金费率页请求失败或结构异常，该基金会显示“费率获取失败”，不会影响限额日报生成和通知发送。
+
    **企业微信机器人**
 
    ```json
@@ -210,7 +227,8 @@ python3 scripts/build_font_subset.py
 ```bash
 python3 -m unittest test_notifier.py
 python3 -m unittest test_report_renderer.py
-python3 -m py_compile monitor.py notifier.py report_renderer.py test_notifier.py test_report_renderer.py
+python3 -m unittest test_monitor.py
+python3 -m py_compile monitor.py notifier.py report_renderer.py test_notifier.py test_report_renderer.py test_monitor.py
 ```
 
 ## GitHub Actions 自动运行

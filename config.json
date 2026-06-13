@@ -1,0 +1,23 @@
+{
+    "webhook_url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=输入你的key",
+    "funds": [
+        { "code": "160213", "name": "国泰纳指100" },
+        { "code": "270042", "name": "广发纳指100", "target_amount": 输入你当前定投金额 },
+        { "code": "015299", "name": "华夏纳指100" },
+        { "code": "016055", "name": "博时纳指100" },
+        { "code": "040046", "name": "华安纳指100", "target_amount": 10 },
+        { "code": "016532", "name": "嘉实纳指100" },
+        { "code": "539001", "name": "建信纳指100", "target_amount": 100 },
+        { "code": "000834", "name": "大成纳指100" },
+        { "code": "019547", "name": "招商纳指100", "target_amount": 10 },
+        { "code": "019524", "name": "华泰纳指100", "target_amount": 10 },
+        { "code": "018043", "name": "天弘纳指100" },
+        { "code": "019172", "name": "摩根纳指100", "target_amount": 10 },
+        { "code": "016452", "name": "南方纳指100", "target_amount": 200 },
+        { "code": "161125", "name": "易方达标普500", "target_amount": 0 },
+        { "code": "050025", "name": "博时标普500", "target_amount": 0 },
+        { "code": "007721", "name": "天弘标普500" },
+        { "code": "018064", "name": "华夏标普500" },
+        { "code": "017641", "name": "摩根标普500", "target_amount": 10  }
+    ]
+}

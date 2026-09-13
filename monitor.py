@@ -46,14 +46,8 @@ class FundMonitor:
         return int(num)
 
     def _get_company_name(self, name):
-        """提取基金公司名称，剥离指数名和冗余后缀"""
-        remove_words = [
-            "纳斯达克100", "纳斯达克", "标普500", "纳指100", "纳指", 
-            "ETF联接", "指数", "发起式", "发起", "精选", "股票", "(LOF)", "A", "C"
-        ]
-        for w in remove_words:
-            name = name.replace(w, "")
-        return name.strip()
+        """推送名称仅保留基金名称的前两个字"""
+        return name.strip()[:2]
 
     def _get_index_type(self, name):
         if "纳斯达克" in name or "纳指" in name:
@@ -102,7 +96,7 @@ class FundMonitor:
             elif info['limit_text'] != "None":
                 info['limit_val'] = self._parse_amount(info['limit_text'])
             else:
-                info['limit_val'] = float('inf')
+                info['limit_val'] = -1
 
         except Exception as e:
             print(f"抓取 {code} 失败: {e}")
@@ -178,10 +172,11 @@ class FundMonitor:
                             if target_val > 0 and 0 < limit_val < target_val:
                                 line += " ⚠️" 
                         else:
-                            line += "**不限**"
+                            line += "**待确认**"
                     else:
                         line += "<font color='warning'>暂停申购</font>"
                     
+                    line += f" ｜ {target_val}"
                     report_lines.append(line)
                 report_lines.append("") 
 
